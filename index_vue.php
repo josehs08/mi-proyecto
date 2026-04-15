@@ -34,7 +34,7 @@
             <table v-if="usuarios.length">
                 <thead>
                     <tr>
-                        <th>ID</th>
+                        <th>ID (Jose estuvo aqui)</th>
                         <th>Nombre</th>
                         <th>Email</th>
                     </tr>
