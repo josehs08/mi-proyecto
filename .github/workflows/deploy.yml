@@ -1,0 +1,91 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        default: 'production'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, xml, curl
+          coverage: none
+
+      - name: Validate composer.json
+        run: composer validate --strict
+
+      - name: Cache Composer packages
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-php-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-php-
+
+      - name: Install dependencies
+        run: composer install --no-progress --no-scripts
+
+      - name: Run tests (optional)
+        run: |
+          if [ -f phpunit.xml ]; then
+            ./vendor/bin/phpunit
+          fi
+
+      - name: Deploy to server
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          export SSHPASS="${{ secrets.DEPLOY_PASSWORD }}"
+          sshpass -e scp -P $DEPLOY_PORT -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key scripts/deploy.sh ${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/
+          
+          export SSHPASS="${{ secrets.DEPLOY_PASSWORD }}"
+          sshpass -e ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${DEPLOY_USER}@${DEPLOY_HOST} "chmod +x /tmp/deploy.sh && /tmp/deploy.sh"
+
+  rollback:
+    needs: deploy
+    runs-on: ubuntu-latest
+    if: failure()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Rollback to previous release
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" | tr -d '\r' > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          export SSHPASS="${{ secrets.DEPLOY_PASSWORD }}"
+          sshpass -e scp -P $DEPLOY_PORT -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key scripts/rollback.sh ${DEPLOY_USER}@${DEPLOY_HOST}:/tmp/
+          
+          LAST_RELEASE=$(sshpass -e ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${DEPLOY_USER}@${DEPLOY_HOST} "ls -1t /var/www/html/mi-proyecto/releases/ | sed -n '2p'")
+          
+          export SSHPASS="${{ secrets.DEPLOY_PASSWORD }}"
+          sshpass -e ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no -i ~/.ssh/deploy_key ${DEPLOY_USER}@${DEPLOY_HOST} "chmod +x /tmp/rollback.sh && /tmp/rollback.sh $LAST_RELEASE"
